@@ -1,3 +1,4 @@
+import os
 import discord
 
 intents = discord.Intents.default()
@@ -13,6 +14,11 @@ async def on_ready():
     print(f'Logged in as {client.user}')
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if channel:
+        async for message in channel.history(limit=None):
+            if message.author == client.user:
+                continue
+            if message.content.strip() not in allowed:
+                await message.delete()
         await channel.send("⚠️ Only numbers 1–10 are allowed in this channel. The number 7 is excluded!")
 
 @client.event
@@ -30,4 +36,4 @@ async def on_message(message):
         except discord.Forbidden:
             pass
 
-client.run("MTQ3NTk5MTYwNTc5NzQ1Mzg5NA.GIzD9K.Cikf_-qu6CFuUDj2zuvD96uvPDNWmIOGqfXl10")
+client.run(os.environ["DISCORD_TOKEN"])
