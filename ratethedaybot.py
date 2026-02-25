@@ -17,16 +17,16 @@ today_ratings = []  # list of {"rating": int, "author": str}
 midnight_task = None
 
 
-def load_yesterday_avg():
+def load_stats():
     if os.path.exists(STATS_FILE):
         with open(STATS_FILE) as f:
-            return json.load(f).get("yesterday_avg")
-    return None
+            return json.load(f)
+    return {}
 
 
-def save_yesterday_avg(avg):
+def save_stats(data):
     with open(STATS_FILE, "w") as f:
-        json.dump({"yesterday_avg": avg}, f)
+        json.dump(data, f)
 
 
 def build_stats_message(is_daily=False):
@@ -35,9 +35,11 @@ def build_stats_message(is_daily=False):
 
     ratings = [r["rating"] for r in today_ratings]
     avg = sum(ratings) / len(ratings)
-    yesterday_avg = load_yesterday_avg()
-    highest = max(today_ratings, key=lambda x: x["rating"])
-    lowest = min(today_ratings, key=lambda x: x["rating"])
+    yesterday_avg = load_stats().get("yesterday_avg")
+    max_rating = max(ratings)
+    min_rating = min(ratings)
+    highest_names = ", ".join(r["author"] for r in today_ratings if r["rating"] == max_rating)
+    lowest_names = ", ".join(r["author"] for r in today_ratings if r["rating"] == min_rating)
 
     delta_str = ""
     if yesterday_avg is not None:
@@ -55,9 +57,34 @@ def build_stats_message(is_daily=False):
         f"{title}\n"
         f"Average: **{avg:.1f}**{delta_str}\n"
         f"Participants: **{len(today_ratings)}**\n"
-        f"Highest rated day: **{highest['rating']}** — {highest['author']}\n"
-        f"Lowest rated day: **{lowest['rating']}** — {lowest['author']}\n"
-        f"-# Type **stats** in this channel anytime to see current stats."
+        f"Highest rated day: **{max_rating}** — {highest_names}\n"
+        f"Lowest rated day: **{min_rating}** — {lowest_names}\n"
+        f"-# Type **stats** for today's stats · **my stats** for your personal stats."
+    )
+
+
+def build_my_stats_message(name):
+    stats = load_stats()
+    user_data = stats.get("users", {}).get(name)
+    today_user_ratings = [r["rating"] for r in today_ratings if r["author"] == name]
+
+    if not user_data and not today_user_ratings:
+        return f"📊 **{name}** hasn't rated any days yet."
+
+    hist_sum = user_data["sum"] if user_data else 0
+    hist_count = user_data["count"] if user_data else 0
+
+    total_sum = hist_sum + sum(today_user_ratings)
+    total_count = hist_count + len(today_user_ratings)
+    avg = total_sum / total_count
+
+    best = max(today_user_ratings + ([user_data["best"]] if user_data else []))
+    worst = min(today_user_ratings + ([user_data["worst"]] if user_data else []))
+
+    return (
+        f"📊 **{name}'s stats**\n"
+        f"All-time average: **{avg:.1f}** across **{total_count}** rating(s)\n"
+        f"Personal best: **{best}** · Personal worst: **{worst}**"
     )
 
 
@@ -66,10 +93,27 @@ async def send_daily_stats():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
+
     await channel.send(build_stats_message(is_daily=True))
+
+    stats = load_stats()
     if today_ratings:
         ratings = [r["rating"] for r in today_ratings]
-        save_yesterday_avg(sum(ratings) / len(ratings))
+        stats["yesterday_avg"] = sum(ratings) / len(ratings)
+
+        users = stats.get("users", {})
+        for entry in today_ratings:
+            name = entry["author"]
+            rating = entry["rating"]
+            if name not in users:
+                users[name] = {"sum": 0, "count": 0, "best": rating, "worst": rating}
+            users[name]["sum"] += rating
+            users[name]["count"] += 1
+            users[name]["best"] = max(users[name]["best"], rating)
+            users[name]["worst"] = min(users[name]["worst"], rating)
+        stats["users"] = users
+
+    save_stats(stats)
     today_ratings = []
 
 
@@ -107,7 +151,7 @@ async def on_ready():
                     "author": message.author.display_name
                 })
 
-        await channel.send("⚠️ Only numbers 1–10 are allowed in this channel. The number 7 is excluded! Type **stats** to see today's stats.")
+        await channel.send("⚠️ Only numbers 1–10 are allowed in this channel. The number 7 is excluded! Type **stats** for today's stats · **my stats** for your personal stats.")
 
     if midnight_task is None:
         midnight_task = asyncio.create_task(midnight_loop())
@@ -120,9 +164,16 @@ async def on_message(message):
     if message.channel.id != TARGET_CHANNEL_ID:
         return
 
-    if message.content.strip().lower() == "stats":
+    content = message.content.strip().lower()
+
+    if content == "stats":
         await message.delete()
         await message.channel.send(build_stats_message(is_daily=False))
+        return
+
+    if content == "my stats":
+        await message.delete()
+        await message.channel.send(build_my_stats_message(message.author.display_name))
         return
 
     if message.content.strip() not in allowed:
